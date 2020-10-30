@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="bluez-web-bluetooth" content="width=device-width, initial-scale=1.0">
+        <title>Document</title>
+        <script src="telink-weight.js"></script>
+
+    </head>
+    <style>
+      html { margin: 0; padding: 0; border: 0; }
+      body { font-family: 'Raleway', sans-serif; color: #d7ecfb; background-color: #072b44; text-align: center; }
+      textarea{color:greenyellow; background-color:black;}
+    </style>
+    <body>
+      <div id="main" style="width: 1450px;float: left;">
+        <h3>Web Bluetooth weight scale</h3><hr>
+        <div id="showlog" style="width: 700px;float: left;">
+          <button style="float: left;" onclick="clearLoginfo()">clear log</button>
+          <button id="btn-connect" onclick="clickConnect()">scan bluetooth</button>
+          <button id="btn-disconnet" onclick="deviceDisconnect()">Disconnect</button><br><br>
+          <textarea id="log" cols="90" rows="20" readonly="readonly"></textarea>
+        </div>
+        <div id="drop" style="width: 700px; height: 350px; float: right; background-color:#072b44">
+          <br><br>
+          <div id="statusText">weight scale Info</div><br><br>
+          <p id="height_value" style="float: left;">height value:</p><br><br><br><br>
+          <p id="weight_value" style="float: left;">weight value:</p><br><br><br><br>
+          <p id="weight_bmi" style="float: left;">Body Mass Index(BMI):</p>
+        </div>
+      </div>
+
+    </body>
+</html>
+
+<script>
+
+    var blockCount,firmwareArray = "";            //ota-file
+    var startTime,sendcmd;                        //sendcmd and time
+    var last4byte,OTAversion=0,actionOTA_03ff=0;  //version check and authentication
+    var ServiceMain,nitifiyCharTemp;              //2b12notify
+    var OTApause=1,OTApuasecount=0;               //OTA-puase,count
+    var heartRates = [];
+    var mode = 'bar';
+
+    var fanlight = new Fanlight();
+
+    /**
+     * @clickConnect
+     * Scan and connect to nearby Bluetooth devices
+    */
+    function clickConnect(){
+      fanlight.request().then(connt => {
+        addLoginfo("Bluetooth connection successful");
+      })
+      .catch(error => {
+        addLoginfo('Argh! ' + error);
+      });
+    }
+
+ 
+  /**
+   * @bytesToHex
+   * Convert ByteArray to hex
+   */
+  function bytesToHex(data) {
+    return new Uint8Array(data).reduce(function(memo, i) {
+        return memo + ("0" + i.toString(16)).slice(-2);
+    }, "");
+  }
+
+  /**
+   * @hexToBytes
+   * Convert hex to ByteArray
+   */
+  function hexToBytes(hex) {
+    for (var bytes = [], c = 0; c < hex.length; c += 2)
+        bytes.push(parseInt(hex.substr(c, 2), 16));
+    return new Uint8Array(bytes);
+  }
+
+  /**
+   * @addLoginfo
+   * Displays the interaction information in the log box on the web page
+   */
+  function addLoginfo(logTXT) {
+    var time = new Date().toLocaleTimeString("de-DE");
+    var logString = time + ": > " + logTXT;
+    document.getElementById("log").innerHTML += logString + "\n";
+  }
+
+  /**
+   * @clearLoginfo
+   * Clear the information in the log box
+   */
+  function clearLoginfo() {
+    document.getElementById("log").value= "";
+  }
+
+  /**
+   * @Failed_info
+   * Display exception information
+   */
+  function Failed_info(err) {
+    addLoginfo("Update error: " + err);
+    setStatus("Update error: " + err);
+  }
+
+  /**
+   * @deviceDisconnect
+   * device disconnect
+   */
+  function deviceDisconnect() {
+    fanlight.disconnect();
+  }
+
+  /**
+   * @OTA_Authorization
+   * Process feedback after a command is sent
+   */
+  function Data_info_manage(gattServer) {
+    heartRates = [];
+    gattServer.getPrimaryService("0000181d-0000-1000-8000-00805f9b34fb")
+      .then(service => {
+        addLoginfo("found weight scale service");
+        console.log(service);
+        ServiceMain = service;
+        return ServiceMain.getCharacteristic("00002a9d-0000-1000-8000-00805f9b34fb");
+      })
+      .then(characteristic => {
+        addLoginfo('Found weight scale characteristic');
+        console.log(characteristic);
+        console.log(characteristic.properties);
+        nitifiyCharTemp = characteristic;
+        return nitifiyCharTemp.startNotifications();
+      })
+      .then(() => {
+        nitifiyCharTemp.addEventListener('characteristicvaluechanged', event => {
+            var souvalue = event.target.value;
+            console.log(souvalue);
+            var ntvalue = bytesToHex(souvalue.buffer);
+            addLoginfo("notify-value: " + ntvalue);
+            author_log();
+
+            var wgdarr1 = "";
+            var wgdarr1 = ntvalue.slice(4,6);
+            var wgdarr1 = wgdarr1 + ntvalue.slice(2,4);
+            var weight_v1 = parseInt(wgdarr1,16);
+            //addLoginfo("height-value: " + weight_v1);
+            document.getElementById("weight_value").innerHTML = "weight value -->: " + weight_v1/200 + "kg";
+
+            var wgdarr2 = "";
+            var wgdarr2 = ntvalue.slice(28,30);
+            var wgdarr2 = wgdarr2 + ntvalue.slice(26,28);
+            var weight_v2 = parseInt(wgdarr2,16);
+            //addLoginfo("weight-value: " + weight_v2);
+            document.getElementById("height_value").innerHTML = "height value -->: " + weight_v2/10 + "cm";
+            
+            var weightdata3 = ntvalue.slice(22,26);
+            var wgdarr3 = "";
+            var wgdarr3 = ntvalue.slice(24,26);
+            var wgdarr3 = wgdarr3 + ntvalue.slice(22,24);
+            var weight_v3 = parseInt(wgdarr3,16);
+            var bmi_value = weight_BMI_value(weight_v3/10);
+            document.getElementById("weight_bmi").innerHTML = "weight BMI value -->: " + weight_v3/10 + " (BMI: " + bmi_value + ")";
+        }).catch(error => console.log(error));
+      });
+  }
+
+  function author_log(){
+    var obj = document.getElementById("log");
+    obj.scrollTop = obj.scrollHeight;
+  }
+
+  function weight_BMI_value(data){
+    var BMI_value = "";
+    
+    if(data < 18.5){
+      BMI_value = "Underweight";
+    }
+    else if(data > 18 && data < 23){
+      BMI_value = "Normal weight ";
+    }
+    else if(data > 24 && data < 28){
+      BMI_value = "overweight ";
+    }
+    else{
+      BMI_value = "obesity";
+    }
+    return BMI_value;
+  }
+
+</script>
